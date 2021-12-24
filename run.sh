@@ -1,6 +1,5 @@
 #!/bin/bash
 set -e # Exit with nonzero exit code if anything fails
-#set -x # debug: print commands before they are executed
 set -o pipefail
 set -o errexit
 
@@ -146,13 +145,14 @@ makeDB() {
   sql-utils extract "$db" tracks --table artists artist
   sql-utils extract "$db" tracks --table albums album artists_id
 
-sqlite-utils convert "$db" artists artist \
-' import json
+  sql-utils schema "$db" artists
+  sql-utils convert "$db" artists artist \
+    'import json
 return json.loads(value)
 ' --multi --drop
 
-sqlite-utils convert "$db" albums artist \
-' import json
+  sql-utils convert "$db" albums album \
+    'import json
 return json.loads(value)
 ' --multi --drop
 
@@ -205,6 +205,8 @@ run() {
   # force re download
   downloadDateToFile "$yesterday"
   downloadDateToFile "$today"
+
+  set -x # debug: print commands before they are executed
 
   commitData
 
