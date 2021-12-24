@@ -113,7 +113,7 @@ function addDate() {
   local date=${1}
   local file="$downloadDir/$date.json"
 
-  sql-utils insert "$db" "listens" "$file"
+  sql-utils insert "$db" "listens" "$file" --alter
 }
 
 function addAllSinceDate() {
