@@ -146,6 +146,16 @@ makeDB() {
   sql-utils extract "$db" tracks --table artists artist
   sql-utils extract "$db" tracks --table albums album artists_id
 
+sqlite-utils convert "$db" artists artist \
+' import json
+return json.loads(value)
+' --multi --drop
+
+sqlite-utils convert "$db" albums artist \
+' import json
+return json.loads(value)
+' --multi --drop
+
   sql-utils enable-fts "$db" tracks name
   sql-utils enable-fts "$db" artists artist
   sql-utils enable-fts "$db" albums album
