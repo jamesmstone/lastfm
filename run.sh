@@ -165,7 +165,7 @@ return json.loads(value)
   sql-utils enable-fts "$db" tracks name
   sql-utils enable-fts "$db" artists name
   sql-utils enable-fts "$db" albums "#text"
-  sql-utils vacuum "$db"
+  sql-utils optimize "$db"
 }
 
 commitDB() {
