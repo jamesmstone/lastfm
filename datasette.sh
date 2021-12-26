@@ -1,5 +1,5 @@
 run() {
-  local db="events.db"
+  local db="music.db"
 
   docker run \
     -p 8001:8001 \
