@@ -210,7 +210,7 @@ publishDB() {
     -v"$(pwd):/wd" \
     -w /wd \
     "$dockerDatasette" \
-    publish vercel "$db" --token $VERCEL_TOKEN --project=lastfmlog
+    publish vercel "$db" --token $VERCEL_TOKEN --project=lastfmlog --install=datasette-vega
 }
 
 run() {
