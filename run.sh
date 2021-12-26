@@ -159,6 +159,8 @@ return json.loads(value)
 
   sql-utils convert "$db" listens date \
     'import json
+if value == None:
+   return None
 return json.loads(value)
 ' --multi --drop
 
