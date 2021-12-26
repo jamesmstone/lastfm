@@ -157,7 +157,7 @@ return json.loads(value)
 ' --multi --drop
 
   sql-utils enable-fts "$db" tracks name
-  sql-utils enable-fts "$db" artists artist
+  sql-utils enable-fts "$db" artists name
   sql-utils enable-fts "$db" albums album
   sql-utils vacuum "$db"
 }
