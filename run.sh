@@ -156,6 +156,12 @@ return json.loads(value)
 return json.loads(value)
 ' --multi --drop
 
+
+  sql-utils convert "$db" listens date \
+    'import json
+return json.loads(value)
+' --multi --drop
+
   sql-utils enable-fts "$db" tracks name
   sql-utils enable-fts "$db" artists name
   sql-utils enable-fts "$db" albums "#text"
