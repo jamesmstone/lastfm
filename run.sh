@@ -165,6 +165,17 @@ return json.loads(value)
   sql-utils enable-fts "$db" tracks name
   sql-utils enable-fts "$db" artists name
   sql-utils enable-fts "$db" albums "#text"
+  sql-utils create-view "$db" listen_details "select
+  l.*,
+  t.*,
+  album.*,
+  artist.*
+from
+  listens l
+  inner join tracks t on l.tracks_id = t.id
+  left join albums album on t.albums_id = album.id
+  left join artists artist on album.artists_id = artist.id"
+
   sql-utils optimize "$db"
 }
 
