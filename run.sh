@@ -168,6 +168,7 @@ return json.loads(value)
   sql-utils enable-fts "$db" artists name
   sql-utils enable-fts "$db" albums "#text"
   sql-utils create-view "$db" listen_details "select
+  sql-utils create-index --if-not-exists "$db" listens date
   l.*,
   t.*,
   album.*,
