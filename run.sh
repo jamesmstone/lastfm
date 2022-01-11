@@ -109,65 +109,36 @@ function ensureHaveAllSinceDate() {
   done
 }
 
-function addDate() {
-  local date=${1}
-  local file="$downloadDir/$date.json"
-
-  sql-utils insert "$db" "listens" "$file" --alter
-}
-
-function addAllSinceDate() {
-  local today=$(date "+%Y-%m-%d")
-  local db=${1}
-  local startDate=${2}
-  local endDate=${3:-$today}
-
-  local curUnix=$(date -d"$startDate" "+%s")
-  local endUnix=$(date -d"$endDate" "+%s")
-
-  while [[ $curUnix -le $endUnix ]]; do
-    local curDate=$(date -d@"$curUnix" "+%Y-%m-%d")
-
-    echo "Adding: $curDate" >&2
-    addDate "$curDate"
-
-    curUnix=$(date -d@"$(($curUnix + (24 * 60 * 60)))" "+%s")
-
-  done
+function addAll() {
+     find "$downloadDir" -name '*.json' -exec jq .[] -c {} \; |
+       jq -s |
+       sql-utils insert "$db" "listens" - \
+        --flatten \
+        --alter
 }
 
 makeDB() {
   local db="$1"
   rm -rf "$db" || true
-  local addSince="$2"
-  addAllSinceDate "$db" "$addSince"
-  sql-utils extract "$db" listens --table tracks artist album mbid name image streamable url
-  sql-utils extract "$db" tracks --table artists artist
-  sql-utils extract "$db" tracks --table albums album artists_id
+  addAll "$db"
+  sql-utils extract "$db" listens --table tracks artist_name artist_url artist_image artist_mbid 'album_#text' album_mbid mbid name image streamable url
+  sql-utils extract "$db" tracks --table artists artist_name artist_url artist_image artist_mbid
+  sql-utils extract "$db" tracks --table albums 'album_#text' album_mbid artists_id
 
-  sql-utils schema "$db" artists
-  sql-utils convert "$db" artists artist \
-    'import json
-return json.loads(value)
-' --multi --drop
+  sql-utils transform "$db" albums \
+    --rename 'album_#text' name \
+    --rename album_mbid mbid
 
-  sql-utils convert "$db" albums album \
-    'import json
-return json.loads(value)
-' --multi --drop
-
-
-  sql-utils convert "$db" listens date \
-    'import json
-if value == None:
-   return None
-return json.loads(value)
-' --multi --drop
+  sql-utils transform "$db" artists \
+    --rename artist_name name \
+    --rename artist_url url \
+    --rename artist_image image \
+    --rename artist_mbid mbid
 
   sql-utils enable-fts "$db" tracks name
   sql-utils enable-fts "$db" artists name
-  sql-utils enable-fts "$db" albums "#text"
-  sql-utils create-index --if-not-exists "$db" listens uts
+  sql-utils enable-fts "$db" albums name
+  sql-utils create-index --if-not-exists "$db" listens date_uts
   sql-utils create-view "$db" listen_details "select
   l.*,
   t.*,
@@ -230,7 +201,7 @@ run() {
 
   commitData
 
-  makeDB "$db" "$startDate"
+  makeDB "$db"
   publishDB "$db"
   commitDB "$db"
 
