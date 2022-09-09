@@ -139,6 +139,10 @@ makeDB() {
   sql-utils enable-fts "$db" artists name
   sql-utils enable-fts "$db" albums name
   sql-utils create-index --if-not-exists "$db" listens date_uts
+    
+  sql-utils "$db" "alter table tracks add column plays"
+  sql-utils "$db" "update tracks set plays=( select count(*) from listens l where l.tracks_id = tracks.id )"
+  
   sql-utils create-view "$db" listen_details "select
   l.*,
   t.*,
@@ -149,7 +153,7 @@ from
   inner join tracks t on l.tracks_id = t.id
   left join albums album on t.albums_id = album.id
   left join artists artist on album.artists_id = artist.id"
-
+  
   sql-utils optimize "$db"
 }
 
