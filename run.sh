@@ -143,6 +143,12 @@ makeDB() {
   sql-utils "$db" "alter table tracks add column plays"
   sql-utils "$db" "update tracks set plays=( select count(*) from listens l where l.tracks_id = tracks.id )"
   
+  sql-utils "$db" "alter table albums add column plays"
+  sql-utils "$db" "update albums set plays=( select sum(t.plays) from tracks t where t.albums_id = albums.id )"
+  
+  sql-utils "$db" "alter table artists add column plays"
+  sql-utils "$db" "update artists set plays=( select sum(a.plays) from albums a where a.artists_id = artists.id )"
+  
   sql-utils create-view "$db" listen_details "select
   l.*,
   t.*,
