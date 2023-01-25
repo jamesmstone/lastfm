@@ -150,10 +150,10 @@ makeDB() {
                                           from next_song_listen),
                         avg_track_duration as (select tracks_id,
                                                          avg(estimated_duration) as avg_estimated_duration,
-                                                         group_concat(estimated_duration)
+                                                         count(tracks_id) as plays
                                                   from listen_length
                                                   group by 1)
-                   select tracks_id, avg_estimated_duration
+                   select tracks_id, avg_estimated_duration, plays, plays * avg_estimated_duration as total_estimated_listen_time
                    from avg_track_duration mtd
                             inner join tracks t on t.id = mtd.tracks_id;"
 
@@ -167,10 +167,7 @@ makeDB() {
   sql-utils enable-fts "$db" artists name
   sql-utils enable-fts "$db" albums name
   sql-utils create-index --if-not-exists "$db" listens date_uts
-    
-  sql-utils "$db" "alter table tracks add column plays"
-  sql-utils "$db" "update tracks set plays=( select count(*) from listens l where l.tracks_id = tracks.id )"
-  
+
   sql-utils "$db" "alter table albums add column plays"
   sql-utils "$db" "update albums set plays=( select sum(t.plays) from tracks t where t.albums_id = albums.id )"
   
