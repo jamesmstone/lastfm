@@ -135,6 +135,34 @@ makeDB() {
     --rename artist_image image \
     --rename artist_mbid mbid
 
+  sql-utils "$db" "create table avg_estimated_duration as
+                   with next_song_listen as (select tracks_id,
+                                                    date_uts                                      as start_date_uts,
+                                                    lead(date_uts) over ( order by date_uts asc ) as next_listen_uts
+                                             from listens
+                                             where date_uts is not null),
+                        listen_length as (select tracks_id,
+                                                 start_date_uts,
+                                                 case
+                                                     when next_listen_uts - start_date_uts > 10 * 60 -- 10 mins
+                                                         then null
+                                                     else next_listen_uts - start_date_uts end as estimated_duration
+                                          from next_song_listen),
+                        avg_track_duration as (select tracks_id,
+                                                         avg(estimated_duration) as avg_estimated_duration,
+                                                         group_concat(estimated_duration)
+                                                  from listen_length
+                                                  group by 1)
+                   select tracks_id, avg_estimated_duration
+                   from avg_track_duration mtd
+                            inner join tracks t on t.id = mtd.tracks_id;"
+
+  sql-utils "$db" "create table tracks_with_avg_estimated_duration as
+                  select * from tracks t inner join avg_estimated_duration med on t.id = med.tracks_id;"
+  sql-utils "$db" "drop table tracks ;"
+  sql-utils "$db" "drop table avg_estimated_duration;"
+  sql-utils "$db" "alter table tracks_with_avg_estimated_duration rename to tracks;"
+
   sql-utils enable-fts "$db" tracks name
   sql-utils enable-fts "$db" artists name
   sql-utils enable-fts "$db" albums name
