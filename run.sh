@@ -4,26 +4,15 @@ set -o pipefail
 set -o errexit
 
 downloadDir="data/lastfm"
-dockerGitHistory="git-history"
 dockerSQLUtil="sqlite-utils"
 
 TZ=UTC
 
 function buildDocker() {
-  docker build --tag "$dockerGitHistory" --pull --file git-history.Dockerfile .
   docker build --tag "$dockerSQLUtil" --file sqlite-utils.Dockerfile .
-
 }
 
-function git-history() {
-  docker run \
-    -i \
-    -u"$(id -u):$(id -g)" \
-    -v"$(pwd):/wd" \
-    -w /wd \
-    "$dockerGitHistory" \
-    "$@"
-}
+
 function sql-utils() {
   docker run \
     -i \
