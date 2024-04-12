@@ -100,12 +100,12 @@ function ensureHaveAllSinceDate() {
 
 function addAll() {
      find "$downloadDir" -name '*.json' -exec jq .[] -c {} \; |
-       jq -s | tee all.json |
+       jq -s > all.json
+       cat all.json
+       cat all.json |
        sql-utils insert "$db" "listens" - \
         --flatten \
         --alter
-
-    cat all.json
 }
 
 makeDB() {
