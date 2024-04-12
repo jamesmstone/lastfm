@@ -100,9 +100,7 @@ function ensureHaveAllSinceDate() {
 
 function addAll() {
      find "$downloadDir" -name '*.json' -exec jq .[] -c {} \; |
-       jq -s > all.json
-       cat all.json
-       cat all.json |
+       jq -s |
        sql-utils insert "$db" "listens" - \
         --flatten \
         --alter
@@ -219,7 +217,7 @@ run() {
   local startDate="2012-11-01"
 
   ensureHaveAllSinceDate "$startDate"
-  # force re download
+#   force re download
   downloadDateToFile "$yesterday"
   downloadDateToFile "$today"
 
