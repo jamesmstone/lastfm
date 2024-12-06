@@ -1,3 +1,3 @@
 FROM python:alpine
-RUN pip install sqlite-utils
+RUN pip install --force-reinstall -v "sqlite-utils==3.35.1" 
 ENTRYPOINT ["sqlite-utils"]
