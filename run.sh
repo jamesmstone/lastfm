@@ -209,7 +209,7 @@ publishDB() {
     publish vercel "$db" \
       --project=lastfmlog \
       --generate-vercel-json > vercel.json
-  sed -i 's/@vercel\/python@3\.0\.7/@vercel\/python@4.5.1/g' vercel.json
+  sed -i 's/@vercel\/python@3\.0\.7/@vercel\/python@4.7.0/g' vercel.json
   docker run \
     -v"$(pwd):/wd" \
     -w /wd \
