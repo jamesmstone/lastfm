@@ -306,6 +306,7 @@ publishDB() {
     "$dockerDatasette" \
     publish vercel "$db" --vercel-json=vercel.json --token $VERCEL_TOKEN --project=lastfmlog --install=datasette-vega
 }
+set -x
 
 run() {
   local db="music.db"
