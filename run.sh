@@ -52,6 +52,7 @@ get_lyrics() {
 
 
 add_lyrics_to_tracks() {
+    set -x
     local db="$1"
 
     # Ensure columns exist
@@ -89,6 +90,7 @@ add_lyrics_to_tracks() {
                  set attempts=coalesce(attempts,0)+1
                  where id=$track_id"
         fi
+        sleep 2
     done
 }
 
