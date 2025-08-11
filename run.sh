@@ -3,6 +3,8 @@ set -e # Exit with nonzero exit code if anything fails
 set -o pipefail
 set -o errexit
 
+LASTFM_API_KEY='29ed15df046ae9a8d2c4cc20eed0a9ba'
+
 downloadDir="data/lastfm"
 dockerSQLUtil="sqlite-utils"
 
