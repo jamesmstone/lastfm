@@ -139,7 +139,7 @@ function downloadDate() {
   local page="1"
   local totalPages="2"
   local recenttracks="[]"
-  while [ $page -le $totalPages ]; do
+  while [ $page -le "$totalPages" ]; do
     local url="https://ws.audioscrobbler.com/2.0/?method=user.getrecenttracks&user=jamesmstone711&api_key=$LASTFM_API_KEY&format=json&from=$startUnix&to=$endUnix&limit=20&extended=1&page=$page"
     local res=$(download "$url")
     totalPages=$(echo $res | jq -r ".recenttracks[\"@attr\"].totalPages")
@@ -278,7 +278,7 @@ commitDB() {
   mv "$tempDB" "$db"
   git add "$db"
   git commit "$db" -m "push db"
-  git push origin "$dbBranch" -f
+#  git push origin "$dbBranch" -f
 }
 commitData() {
   git config user.name "Automated"
@@ -286,7 +286,7 @@ commitData() {
   git add -A
   timestamp=$(date -u)
   git commit -m "Latest data: ${timestamp}" || exit 0
-  git push
+#  git push
 }
 
 publishDB() {
