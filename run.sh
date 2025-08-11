@@ -8,6 +8,92 @@ dockerSQLUtil="sqlite-utils"
 
 TZ=UTC
 
+
+
+fetch(){
+  curl --compressed \
+       -H 'User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:141.0) Gecko/20100101 Firefox/141.0' \
+       -H 'Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8' \
+       -H 'Accept-Language: en-US,en;q=0.5' \
+       -H 'Accept-Encoding: gzip, deflate, br, zstd' \
+       -H 'Referer: https://html.duckduckgo.com/' \
+       -H 'Connection: keep-alive' \
+       -H 'Upgrade-Insecure-Requests: 1' \
+       -H 'Sec-Fetch-Dest: document' \
+       -H 'Sec-Fetch-Mode: navigate' \
+       -H 'Sec-Fetch-Site: cross-site' \
+       -H 'Sec-Fetch-User: ?1' \
+       -H 'DNT: 1' \
+       -H 'Sec-GPC: 1' \
+       -H 'Priority: u=0, i' \
+       -H 'Pragma: no-cache' \
+       -H 'Cache-Control: no-cache' \
+       "$@"
+}
+
+get_lyrics() {
+    local artist="$1"
+    local title="$2"
+
+    artist_url=$(echo "$artist" | tr '[:upper:]' '[:lower:]' \
+                 | sed 's/^the //; s/[^a-z0-9]//g')
+    title_url=$(echo "$title" | tr '[:upper:]' '[:lower:]' \
+                | sed 's/[^a-z0-9]//g')
+
+    url="https://www.azlyrics.com/lyrics/${artist_url}/${title_url}.html"
+
+    if [[ -z "$url" ]]; then
+        echo "No results found."
+        return 1
+    fi
+
+    fetch "$url" | sed -n '/<!-- Usage of azlyrics.com content/,/-->/ { /<!-- Usage/ d; /-->/ d; p }'
+}
+
+
+add_lyrics_to_tracks() {
+    local db="$1"
+
+    # Ensure columns exist
+    sql-utils "$db" "alter table tracks add column lyrics text;"
+    sql-utils "$db" "alter table tracks add column attempts integer;"
+
+    # Select only tracks that need lyrics
+    sql-utils "$db" \
+        "select id, artists_id, name
+         from tracks
+         where (attempts is null or attempts < 3)
+           and (lyrics is null or lyrics = '')" |
+    while IFS=$'\t' read -r track_id artist_id track_name; do
+        # Get artist name
+        artist_name=$(sql-utils "$db" "select name from artists where id=$artist_id" --csv --no-headers)
+
+        echo "Fetching lyrics for: $artist_name - $track_name" >&2
+
+        # Get lyrics (may fail)
+        lyrics=$(get_lyrics "$artist_name" "$track_name" || true)
+
+        # Escape quotes for SQL
+        lyrics_escaped=$(printf "%s" "$lyrics" | sed "s/'/''/g")
+
+        # Update lyrics & attempts
+        if [ -n "$lyrics" ]; then
+            sql-utils "$db" \
+                "update tracks
+                 set lyrics='$lyrics_escaped',
+                     attempts=coalesce(attempts,0)+1
+                 where id=$track_id"
+        else
+            sql-utils "$db" \
+                "update tracks
+                 set attempts=coalesce(attempts,0)+1
+                 where id=$track_id"
+        fi
+    done
+}
+
+
+
 function buildDocker() {
   docker build --tag "$dockerSQLUtil" --file sqlite-utils.Dockerfile .
 }
@@ -174,6 +260,8 @@ from
   left join albums album on t.albums_id = album.id
   left join artists artist on album.artists_id = artist.id"
   
+  add_lyrics_to_tracks "$db"
+
   sql-utils optimize "$db"
 }
 
