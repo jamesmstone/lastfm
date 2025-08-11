@@ -198,7 +198,7 @@ function addAll() {
 
 makeDB() {
   local db="$1"
-  rm -rf "$db" || true
+#  rm -rf "$db" || true
   addAll "$db"
   sql-utils extract "$db" listens --table tracks artist_name artist_url artist_image artist_mbid 'album_#text' album_mbid mbid name image streamable url
   sql-utils extract "$db" tracks --table artists artist_name artist_url artist_image artist_mbid
