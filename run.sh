@@ -5,7 +5,8 @@ set -o errexit
 
 LASTFM_API_KEY='29ed15df046ae9a8d2c4cc20eed0a9ba'
 
-downloadDir="data/lastfm"
+downloadDirLastfm="data/lastfm"
+downloadDirLyrics="data/lyrics"
 dockerSQLUtil="sqlite-utils"
 
 TZ=UTC
@@ -49,17 +50,30 @@ get_lyrics() {
         return 1
     fi
 
-    fetch "$url" | sed -n '/<!-- Usage of azlyrics.com content/,/-->/ { /<!-- Usage/ d; /-->/ d; p }'
+    mkdir -p "$downloadDirLyrics/$artist_url"
+    local cache_file="$downloadDirLyrics/$artist_url/${title_url}.html"
+
+    # Return cached content if exists
+    if [[ -f "$cache_file" ]]; then
+        cat "$cache_file"
+        return 0
+    fi
+
+    # Respect cache-only mode: don't fetch if missing
+    if [[ "${LYRICS_CACHE_ONLY:-}" == "1" ]]; then
+        return 1
+    fi
+
+    # Fetch and cache new content
+    fetch "$url" | sed -n '/<!-- Usage of azlyrics.com content/,/-->/ { /<!-- Usage/ d; /-->/ d; p }' | tee "$cache_file"
 }
 
 
 add_lyrics_to_tracks() {
-    set -x
     local db="$1"
 
-    # Ensure columns exist
-    sql-utils "$db" "alter table tracks add column lyrics text;"
-    sql-utils "$db" "alter table tracks add column attempts integer;"
+    sql-utils "$db" "alter table tracks add column lyrics text;" || true
+    sql-utils "$db" "alter table tracks add column attempts integer;" || true
 
     # Select only tracks that need lyrics
     sql-utils "$db" \
@@ -113,8 +127,8 @@ function sql-utils() {
     "$@"
 }
 
-function ensureDownloadDir() {
-  mkdir -p "$downloadDir"
+function ensureDownloadDirLastfm() {
+  mkdir -p "$downloadDirLastfm"
 }
 
 function download() {
@@ -156,14 +170,14 @@ function downloadDate() {
 
 downloadDateToFile() {
   local date=${1}
-  local file="$downloadDir/$date.json"
-  ensureDownloadDir
+  local file="$downloadDirLastfm/$date.json"
+  ensureDownloadDirLastfm
   downloadDate "$date" >"$file"
 }
 
 function ensureHaveDate() {
   local date=${1}
-  local file="$downloadDir/$date.json"
+  local file="$downloadDirLastfm/$date.json"
   if [ -f "$file" ]; then
     return 0
   fi
@@ -189,11 +203,12 @@ function ensureHaveAllSinceDate() {
 }
 
 function addAll() {
-     find "$downloadDir" -name '*.json' -exec jq .[] -c {} \; |
-       jq -s |
-       sql-utils insert "$db" "listens" - \
-        --flatten \
-        --alter
+  local db="$1"
+  find "$downloadDirLastfm" -name '*.json' -exec jq .[] -c {} \; |
+    jq -s |
+    sql-utils insert "$db" "listens" - \
+      --flatten \
+      --alter
 }
 
 makeDB() {
@@ -264,8 +279,6 @@ from
   left join albums album on t.albums_id = album.id
   left join artists artist on album.artists_id = artist.id"
   
-  add_lyrics_to_tracks "$db"
-
   sql-utils optimize "$db"
 }
 
@@ -273,25 +286,28 @@ commitDB() {
   local dbBranch="db"
   local db="$1"
   local tempDB="$(mktemp)"
+  git config user.name "Automated"
+  git config user.email "actions@users.noreply.github.com"
   git branch -D "$dbBranch" || true
   git checkout --orphan "$dbBranch"
   mv "$db" "$tempDB"
   rm -rf *
   mv "$tempDB" "$db"
   git add "$db"
-  git commit "$db" -m "push db"
+  git commit -m "Update DB branch"
 #  git push origin "$dbBranch" -f
 }
 commitData() {
   git config user.name "Automated"
   git config user.email "actions@users.noreply.github.com"
-  git add -A
+  git add data/
   timestamp=$(date -u)
-  git commit -m "Latest data: ${timestamp}" || exit 0
+  git commit -m "Latest data: ${timestamp}" || true
 #  git push
 }
 
 publishDB() {
+  local db="$1"
   local dockerDatasette="datasette"
   docker build --tag "$dockerDatasette" --pull --file datasette.Dockerfile .
   docker run \
@@ -309,6 +325,32 @@ publishDB() {
     publish vercel "$db" --vercel-json=vercel.json --token $VERCEL_TOKEN --project=lastfmlog --install=datasette-vega
 }
 
+# Download only: prefetch lyrics HTMLs into cache without touching the DB
+prefetch_lyrics_for_tracks() {
+  local db="$1"
+  mkdir -p "$downloadDirLyrics"
+  # Ensure columns exist so the WHERE clause works
+  sql-utils "$db" "alter table tracks add column lyrics text;" || true
+  sql-utils "$db" "alter table tracks add column attempts integer;" || true
+  sql-utils "$db" \
+    "select a.name, t.name
+       from tracks t
+       join artists a on t.artists_id = a.id
+      where (t.attempts is null or t.attempts < 3)
+        and (t.lyrics is null or t.lyrics = '')" |
+  while IFS=$'\t' read -r artist_name track_name; do
+    echo "Prefetching lyrics for: $artist_name - $track_name" >&2
+    get_lyrics "$artist_name" "$track_name" >/dev/null || true
+    sleep 2
+  done
+}
+
+# Update DB using cached lyrics only (no network)
+update_lyrics_in_tracks() {
+  local db="$1"
+  LYRICS_CACHE_ONLY=1 add_lyrics_to_tracks "$db"
+}
+
 run() {
   local db="music.db"
   local today=$(date "+%Y-%m-%d")
@@ -316,19 +358,31 @@ run() {
 
   local startDate="2012-11-01"
 
+  # 1) Download all data from lastfm
   ensureHaveAllSinceDate "$startDate"
-#   force re download
+  # force re-download for yesterday/today windows
   downloadDateToFile "$yesterday"
   downloadDateToFile "$today"
 
   set -x # debug: print commands before they are executed
 
+  # 2) Build lastfm db
+  makeDB "$db"
+
+  # 3) Download all data from lyrics (cache only)
+  prefetch_lyrics_for_tracks "$db"
+
+  # 4) Update db with lyrics from cache
+  update_lyrics_in_tracks "$db"
+
+  # Optional publish step (not part of the six steps)
+  publishDB "$db"
+
+  # 5) Commit data dir
   commitData
 
-  makeDB "$db"
-  publishDB "$db"
+  # 6) Commit db to its own branch
   commitDB "$db"
-
 }
 
 buildDocker
