@@ -260,7 +260,7 @@ from
   left join albums album on t.albums_id = album.id
   left join artists artist on album.artists_id = artist.id"
   
-  add_lyrics_to_tracks "$db"
+  # add_lyrics_to_tracks "$db" # skipped for now as not yet working
 
   sql-utils optimize "$db"
 }
