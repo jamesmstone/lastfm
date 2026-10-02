@@ -1,0 +1,27 @@
+name: CI
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  check:
+    runs-on: native
+    timeout-minutes: 60
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Lint run.sh
+        run: |
+          bash -n run.sh
+          nix run nixpkgs#shellcheck -- --severity=error run.sh
+
+      - name: Rebuild the database from the committed data
+        run: nix shell nixpkgs#sqlite-utils nixpkgs#jq nixpkgs#findutils --command ./run.sh makeDB music.db
+
+      - name: Check the database
+        run: nix run nixpkgs#sqlite-utils -- tables music.db

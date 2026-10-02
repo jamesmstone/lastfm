@@ -8,3 +8,7 @@
 /dataSources.local.xml
 
 .idea
+
+# ~80MB and fully derived from data/lastfm; the scrape publishes it to the
+# datasette host rather than committing it.
+music.db
