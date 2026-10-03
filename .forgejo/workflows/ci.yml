@@ -15,11 +15,13 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v7
 
+      # Builds the binary, runs the Go tests, gofmt-checks the sources, builds
+      # music.db from the committed days, and drives the scraper unit in a VM.
       - name: Build and test
         run: nix flake check --print-build-logs
 
-      - name: Rebuild the database from the committed data
-        run: nix run . -- build
+      - name: Build the database from the committed data
+        run: nix build .#musicdb --print-build-logs
 
       - name: Check the database
-        run: nix run nixpkgs#sqlite -- music.db .tables
+        run: nix run nixpkgs#sqlite -- result .tables

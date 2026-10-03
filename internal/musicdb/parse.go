@@ -2,6 +2,7 @@ package musicdb
 
 import (
 	"bytes"
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -11,8 +12,9 @@ import (
 	"strings"
 )
 
-// scrobble mirrors one element of a day file. The image arrays stay raw: they
-// are stored as JSON text, so decoding them would only cost time.
+// scrobble mirrors one element of a day file. The image arrays are kept raw
+// because they are stored as JSON text rather than read as structure; see
+// canonicalJSON for why they still cannot be copied through byte for byte.
 type scrobble struct {
 	Artist struct {
 		URL   string          `json:"url"`
@@ -39,14 +41,31 @@ type scrobble struct {
 	Loved *string `json:"loved"`
 }
 
-// dayFiles lists the day files in date order, which is also the order rows are
-// inserted in, so ids stay stable from one build to the next.
-func dayFiles(dir string) ([]string, error) {
-	paths, err := filepath.Glob(filepath.Join(dir, "*.json"))
-	if err != nil {
-		return nil, err
+// dayFiles lists the day files across dirs in date order, which is also the
+// order rows are inserted in, so ids stay stable from one build to the next.
+//
+// The archive is split into a settled half and a pending tail, and a date must
+// live in exactly one of them: a day read twice would count every one of its
+// listens twice, which no later check would catch.
+func dayFiles(dirs []string) ([]string, error) {
+	var paths []string
+	for _, dir := range dirs {
+		found, err := filepath.Glob(filepath.Join(dir, "*.json"))
+		if err != nil {
+			return nil, err
+		}
+		paths = append(paths, found...)
 	}
-	slices.Sort(paths)
+	// By date rather than by path, so the two halves interleave correctly.
+	slices.SortFunc(paths, func(a, b string) int {
+		return cmp.Compare(filepath.Base(a), filepath.Base(b))
+	})
+
+	for i := 1; i < len(paths); i++ {
+		if filepath.Base(paths[i]) == filepath.Base(paths[i-1]) {
+			return nil, fmt.Errorf("%s and %s are the same day", paths[i-1], paths[i])
+		}
+	}
 	return paths, nil
 }
 
@@ -106,25 +125,36 @@ func parseDay(path string) ([]scrobble, error) {
 		if e == nil {
 			continue
 		}
-		e.Image = compactJSON(e.Image)
-		e.Artist.Image = compactJSON(e.Artist.Image)
+		e.Image = canonicalJSON(e.Image)
+		e.Artist.Image = canonicalJSON(e.Artist.Image)
 		day = append(day, *e)
 	}
 	return day, nil
 }
 
-// compactJSON normalises a raw value so two scrobbles describing the same
-// artist collapse to one row however their day files happen to be spaced.
-func compactJSON(raw json.RawMessage) json.RawMessage {
+// canonicalJSON re-encodes a raw value so two scrobbles describing the same artist
+// collapse to one row however their day file was written. The same image list
+// reaches the archive in more than one spelling: the API escapes the slashes in
+// its URLs and the jq-based scraper that wrote most of the archive did not, and
+// day files differ in spacing and key order too. All of that is one value after
+// a round trip, and none of it is after a byte-level compaction.
+func canonicalJSON(raw json.RawMessage) json.RawMessage {
 	raw = bytes.TrimSpace(raw)
 	if len(raw) == 0 {
 		return nil
 	}
-	var buf bytes.Buffer
-	if err := json.Compact(&buf, raw); err != nil {
+	var value any
+	if err := json.Unmarshal(raw, &value); err != nil {
 		return raw
 	}
-	return buf.Bytes()
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	// Match the archive, which holds raw ampersands and angle brackets.
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(value); err != nil {
+		return raw
+	}
+	return bytes.TrimSuffix(buf.Bytes(), []byte("\n"))
 }
 
 func (s *scrobble) nowPlaying() *string {

@@ -2,7 +2,9 @@ package musicdb
 
 import (
 	"database/sql"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -10,7 +12,8 @@ func build(t *testing.T) *sql.DB {
 	t.Helper()
 
 	path := filepath.Join(t.TempDir(), "music.db")
-	stats, err := Build("testdata/days", path)
+	// Two dirs, as a real archive has: the settled days and the pending tail.
+	stats, err := Build([]string{"testdata/days", "testdata/pending"}, path)
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -136,7 +139,9 @@ func TestBuildNormalises(t *testing.T) {
 	if err := db.QueryRow(`SELECT image FROM artists WHERE name = 'X'`).Scan(&image); err != nil {
 		t.Fatal(err)
 	}
-	if want := `[{"size":"small","#text":"x.png"}]`; image != want {
+	// Re-encoded rather than copied through, which is what collapses the
+	// spellings the archive holds; that also settles the key order.
+	if want := `[{"#text":"x.png","size":"small"}]`; image != want {
 		t.Errorf("artist image = %s, want %s", image, want)
 	}
 }
@@ -184,3 +189,53 @@ func TestBuildIndexesNamesForSearch(t *testing.T) {
 
 func nf(f float64) sql.NullFloat64 { return sql.NullFloat64{Float64: f, Valid: true} }
 func ni(i int64) sql.NullInt64     { return sql.NullInt64{Int64: i, Valid: true} }
+
+func TestBuildRejectsADayInBothHalves(t *testing.T) {
+	settled, pending := t.TempDir(), t.TempDir()
+	for _, dir := range []string{settled, pending} {
+		if err := os.WriteFile(filepath.Join(dir, "2020-01-01.json"), []byte("[]"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	_, err := Build([]string{settled, pending}, filepath.Join(t.TempDir(), "music.db"))
+	if err == nil {
+		t.Fatal("want an error when a day is settled and pending at once")
+	}
+	if !strings.Contains(err.Error(), "same day") {
+		t.Errorf("got %v, want it to name the duplicated day", err)
+	}
+}
+
+func TestBuildCollapsesEquivalentJSON(t *testing.T) {
+	// The API escapes the forward slashes in its URLs and the jq-based scraper
+	// that wrote most of the archive did not, so the same artist reaches the
+	// build in two spellings. They have to be one row, or every artist, album
+	// and track scraped on both sides of that change is counted twice.
+	play := func(uts, image string) string {
+		return `{"artist":{"url":"https://last.fm/X","name":"X","image":` + image +
+			`,"mbid":""},"date":{"uts":"` + uts + `","#text":"t"},"mbid":"t1","name":"One","image":` +
+			image + `,"url":"https://last.fm/X/_/One","streamable":"0","album":{"mbid":"","#text":"A"},"loved":"0"}`
+	}
+	plain := `[{"size":"small","#text":"https://img/x.png"}]`
+	escaped := strings.ReplaceAll(`[{"#text":"https://img/x.png","size":"small"}]`, "/", `\/`)
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "2020-01-01.json"),
+		[]byte("["+play("1000", plain)+"]"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "2020-01-02.json"),
+		[]byte("["+play("2000", escaped)+"]"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	stats, err := Build([]string{dir}, filepath.Join(t.TempDir(), "music.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := Stats{Days: 2, Listens: 2, Tracks: 1, Albums: 1, Artists: 1}
+	if stats != want {
+		t.Errorf("stats = %+v, want %+v", stats, want)
+	}
+}
