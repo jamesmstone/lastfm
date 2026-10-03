@@ -15,13 +15,11 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v7
 
-      - name: Lint run.sh
-        run: |
-          bash -n run.sh
-          nix run nixpkgs#shellcheck -- --severity=error run.sh
+      - name: Build and test
+        run: nix flake check --print-build-logs
 
       - name: Rebuild the database from the committed data
-        run: nix shell nixpkgs#sqlite-utils nixpkgs#jq nixpkgs#findutils --command ./run.sh makeDB music.db
+        run: nix run . -- build
 
       - name: Check the database
-        run: nix run nixpkgs#sqlite-utils -- tables music.db
+        run: nix run nixpkgs#sqlite -- music.db .tables

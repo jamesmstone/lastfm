@@ -12,3 +12,9 @@
 # ~80MB and fully derived from data/lastfm; the scrape publishes it to the
 # datasette host rather than committing it.
 music.db
+
+# nix build symlink
+/result
+
+# staging file musicdb writes before renaming music.db into place
+music.db.building

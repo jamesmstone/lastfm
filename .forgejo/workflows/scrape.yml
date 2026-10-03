@@ -16,10 +16,26 @@ jobs:
       - name: Check out this repo
         uses: actions/checkout@v7
 
-      - name: Fetch and build
+      - name: Fetch the latest plays
         env:
           LASTFM_API_KEY: ${{ secrets.LASTFM_API_KEY }}
-        run: nix shell nixpkgs#sqlite-utils nixpkgs#jq nixpkgs#findutils --command ./run.sh
+        run: nix run . -- fetch
+
+      - name: Commit the raw data
+        # A day with no new plays is the normal case, not a reason to stop: the
+        # database is rebuilt and published either way.
+        run: |-
+          git config user.name "Automated"
+          git config user.email "lastfmauto@jamesst.one"
+          git add -A
+          if git commit -m "Latest data: $(date -u)"; then
+            git push origin HEAD:main
+          else
+            echo "no new data to commit" >&2
+          fi
+
+      - name: Build the database
+        run: nix run . -- build
 
       - name: Publish database
         # Rename rather than write in place: Datasette holds the database open,
