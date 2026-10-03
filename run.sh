@@ -277,8 +277,14 @@ commitData() {
   git config user.email "lastfmauto@jamesst.one"
   git add -A
   timestamp=$(date -u)
-  git commit -m "Latest data: ${timestamp}" || exit 0
-  git push origin HEAD:main
+  # A day with no new plays is the normal case, not a reason to stop: music.db
+  # is gitignored and only exists once makeDB has run, so bailing out here left
+  # the publish step with no database to install and failed the job.
+  if git commit -m "Latest data: ${timestamp}"; then
+    git push origin HEAD:main
+  else
+    echo "no new data to commit" >&2
+  fi
 }
 
 run() {
