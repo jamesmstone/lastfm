@@ -1,0 +1,1 @@
+[ { "artist": { "url": "https://last.fm/music/Z", "name": "Z", "image": [ { "size": "small", "#text": "z.png" } ], "mbid": "" }, "mbid": "mb-t4", "name": "Four", "image": [ { "size": "small", "#text": "t4.png" } ], "url": "https://last.fm/music/Z/_/Four", "streamable": "0", "album": { "mbid": "", "#text": "Third" }, "@attr": { "nowplaying": "true" }, "loved": "0" } ]

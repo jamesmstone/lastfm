@@ -1,0 +1,186 @@
+package musicdb
+
+import (
+	"database/sql"
+	"path/filepath"
+	"testing"
+)
+
+func build(t *testing.T) *sql.DB {
+	t.Helper()
+
+	path := filepath.Join(t.TempDir(), "music.db")
+	stats, err := Build("testdata/days", path)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	want := Stats{Days: 4, Listens: 6, Tracks: 3, Albums: 3, Artists: 3}
+	if stats != want {
+		t.Errorf("stats = %+v, want %+v", stats, want)
+	}
+
+	db, err := sql.Open("sqlite3", path)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+	return db
+}
+
+func TestBuildTracks(t *testing.T) {
+	db := build(t)
+
+	// One plays twice: 120s before Two started, then a gap too long to measure.
+	// Three's only dated listen is the last in the archive, so it has nothing
+	// to measure against. Four is never scrobbled with a date at all.
+	want := []struct {
+		name     string
+		plays    int64
+		duration sql.NullFloat64
+		total    sql.NullFloat64
+	}{
+		{"One", 2, nf(120), nf(240)},
+		{"Two", 1, nf(60), nf(60)},
+		{"Three", 1, sql.NullFloat64{}, sql.NullFloat64{}},
+	}
+
+	rows, err := db.Query(`SELECT name, plays, avg_estimated_duration, total_estimated_listen_time FROM tracks ORDER BY id`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+
+	var got int
+	for rows.Next() {
+		var name string
+		var plays int64
+		var duration, total sql.NullFloat64
+		if err := rows.Scan(&name, &plays, &duration, &total); err != nil {
+			t.Fatal(err)
+		}
+		if got >= len(want) {
+			t.Fatalf("more tracks than expected, got %q", name)
+		}
+		w := want[got]
+		if name != w.name || plays != w.plays || duration != w.duration || total != w.total {
+			t.Errorf("track %d = %q plays=%d duration=%v total=%v, want %q plays=%d duration=%v total=%v",
+				got, name, plays, duration, total, w.name, w.plays, w.duration, w.total)
+		}
+		got++
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if got != len(want) {
+		t.Errorf("got %d tracks, want %d", got, len(want))
+	}
+}
+
+func TestBuildRollsPlaysUp(t *testing.T) {
+	// Third holds only a now-playing scrobble, so no track of it survives and
+	// its play count stays unknown rather than becoming zero.
+	for _, tc := range []struct {
+		query string
+		want  map[string]sql.NullInt64
+	}{
+		{
+			`SELECT name, plays FROM albums`,
+			map[string]sql.NullInt64{"First": ni(3), "Second": ni(1), "Third": {}},
+		},
+		{
+			`SELECT name, plays FROM artists`,
+			map[string]sql.NullInt64{"X": ni(3), "Y": ni(1), "Z": {}},
+		},
+	} {
+		db := build(t)
+		rows, err := db.Query(tc.query)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := map[string]sql.NullInt64{}
+		for rows.Next() {
+			var name string
+			var plays sql.NullInt64
+			if err := rows.Scan(&name, &plays); err != nil {
+				t.Fatal(err)
+			}
+			got[name] = plays
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			t.Fatal(err)
+		}
+		if len(got) != len(tc.want) {
+			t.Errorf("%s returned %d rows, want %d", tc.query, len(got), len(tc.want))
+		}
+		for name, want := range tc.want {
+			if got[name] != want {
+				t.Errorf("%s: %s plays = %v, want %v", tc.query, name, got[name], want)
+			}
+		}
+	}
+}
+
+func TestBuildNormalises(t *testing.T) {
+	db := build(t)
+
+	var albums int
+	if err := db.QueryRow(`SELECT count(*) FROM albums a JOIN artists ar ON a.artists_id = ar.id WHERE ar.name = 'X'`).Scan(&albums); err != nil {
+		t.Fatal(err)
+	}
+	if albums != 1 {
+		t.Errorf("artist X has %d albums, want 1", albums)
+	}
+
+	var image string
+	if err := db.QueryRow(`SELECT image FROM artists WHERE name = 'X'`).Scan(&image); err != nil {
+		t.Fatal(err)
+	}
+	if want := `[{"size":"small","#text":"x.png"}]`; image != want {
+		t.Errorf("artist image = %s, want %s", image, want)
+	}
+}
+
+func TestBuildKeepsUndatedListens(t *testing.T) {
+	db := build(t)
+
+	var nowPlaying int
+	if err := db.QueryRow("SELECT count(*) FROM listens WHERE [@attr_nowplaying] = 'true' AND date_uts IS NULL").Scan(&nowPlaying); err != nil {
+		t.Fatal(err)
+	}
+	if nowPlaying != 2 {
+		t.Errorf("got %d now-playing listens, want 2", nowPlaying)
+	}
+
+	// listen_details joins tracks, which only holds tracks with a dated listen,
+	// so Four — scrobbled only as now-playing — drops out of the view.
+	var details int
+	if err := db.QueryRow(`SELECT count(*) FROM listen_details`).Scan(&details); err != nil {
+		t.Fatal(err)
+	}
+	if details != 5 {
+		t.Errorf("listen_details has %d rows, want 5", details)
+	}
+}
+
+func TestBuildIndexesNamesForSearch(t *testing.T) {
+	db := build(t)
+
+	for table, query := range map[string]string{
+		"tracks":  "Three",
+		"albums":  "Second",
+		"artists": "Y",
+	} {
+		var name string
+		q := `SELECT name FROM ` + table + `_fts WHERE ` + table + `_fts MATCH ?`
+		if err := db.QueryRow(q, query).Scan(&name); err != nil {
+			t.Fatalf("%s_fts match %q: %v", table, query, err)
+		}
+		if name != query {
+			t.Errorf("%s_fts match %q = %q", table, query, name)
+		}
+	}
+}
+
+func nf(f float64) sql.NullFloat64 { return sql.NullFloat64{Float64: f, Valid: true} }
+func ni(i int64) sql.NullInt64     { return sql.NullInt64{Int64: i, Valid: true} }
