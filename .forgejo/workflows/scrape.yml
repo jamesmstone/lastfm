@@ -1,5 +1,10 @@
 name: Scrape latest data
 
+# Retired once hermanii runs services.lastfm-scraper (nix/scraper-module.nix):
+# the timer does the same work with bounded git calls and without depending on
+# the runner being on the host that serves the database. Kept until then so the
+# scrape does not stop between this landing and that being switched on.
+
 permissions:
   contents: write
 

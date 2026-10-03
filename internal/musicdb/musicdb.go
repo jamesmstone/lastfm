@@ -33,10 +33,10 @@ func (s Stats) String() string {
 		s.Days, s.Listens, s.Tracks, s.Albums, s.Artists)
 }
 
-// Build reads every day file in dataDir and writes a fresh database to path,
+// Build reads every day file in dirs and writes a fresh database to path,
 // replacing whatever was there.
-func Build(dataDir, path string) (Stats, error) {
-	paths, err := dayFiles(dataDir)
+func Build(dirs []string, path string) (Stats, error) {
+	paths, err := dayFiles(dirs)
 	if err != nil {
 		return Stats{}, err
 	}

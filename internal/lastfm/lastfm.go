@@ -13,7 +13,9 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -257,6 +259,19 @@ func (s Store) Has(date time.Time) bool {
 	return err == nil
 }
 
+// Read returns the tracks stored for a day.
+func (s Store) Read(date time.Time) ([]json.RawMessage, error) {
+	raw, err := os.ReadFile(s.Path(date))
+	if err != nil {
+		return nil, err
+	}
+	var tracks []json.RawMessage
+	if err := json.Unmarshal(raw, &tracks); err != nil {
+		return nil, fmt.Errorf("%s: %w", s.Path(date), err)
+	}
+	return tracks, nil
+}
+
 // Write saves a day's tracks as a JSON array, replacing the file atomically so
 // a failed or interrupted scrape can never leave a truncated day behind.
 func (s Store) Write(date time.Time, tracks []json.RawMessage) error {
@@ -295,6 +310,14 @@ func (s Store) Write(date time.Time, tracks []json.RawMessage) error {
 	return os.Rename(tmp.Name(), path)
 }
 
+// Remove deletes a day file if it is there.
+func (s Store) Remove(date time.Time) error {
+	if err := os.Remove(s.Path(date)); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
+}
+
 // Days returns every date from start to end inclusive.
 func Days(start, end time.Time) []time.Time {
 	var days []time.Time
@@ -302,4 +325,131 @@ func Days(start, end time.Time) []time.Time {
 		days = append(days, d)
 	}
 	return days
+}
+
+// Archive is the scrape on disk, split at the day it stops changing.
+//
+// Settled days are written once and never rewritten, which is what lets the
+// database be a build output: the directory changes when a day is added, not
+// every time the tail is re-scraped. Pending holds the days still gaining
+// plays, and Settle moves them across once they are over.
+//
+// A date lives in exactly one of the two. musicdb reads both and refuses to
+// build if that stops being true, because a day present twice would count
+// every one of its listens twice.
+type Archive struct {
+	Settled Store
+	Pending Store
+	// Cutoff is the first day considered still in progress.
+	Cutoff time.Time
+}
+
+// store returns the half of the archive a day belongs in.
+func (a Archive) store(date time.Time) Store {
+	if date.UTC().Before(a.Cutoff.UTC()) {
+		return a.Settled
+	}
+	return a.Pending
+}
+
+func (a Archive) other(date time.Time) Store {
+	if date.UTC().Before(a.Cutoff.UTC()) {
+		return a.Pending
+	}
+	return a.Settled
+}
+
+// Has reports whether the day has been scraped into either half.
+func (a Archive) Has(date time.Time) bool {
+	return a.Settled.Has(date) || a.Pending.Has(date)
+}
+
+// Change is what an Update did.
+type Change struct {
+	Written bool
+	Scraped int // dated plays the scrape returned
+	OnDisk  int // dated plays already in the archive
+}
+
+// Update writes a day into the half it belongs in, unless doing so would drop
+// dated plays that are already on disk.
+//
+// A scrape can come back short — the API answers 200 with a partial window
+// often enough to matter — and a day that exists is never scraped again, so
+// overwriting with the shorter answer would lose those plays for good.
+func (a Archive) Update(date time.Time, tracks []json.RawMessage) (Change, error) {
+	change := Change{Scraped: Dated(tracks)}
+	for _, s := range []Store{a.Settled, a.Pending} {
+		if !s.Has(date) {
+			continue
+		}
+		old, err := s.Read(date)
+		if err != nil {
+			return change, err
+		}
+		change.OnDisk = max(change.OnDisk, Dated(old))
+	}
+	if change.Scraped < change.OnDisk {
+		return change, nil
+	}
+
+	if err := a.store(date).Write(date, tracks); err != nil {
+		return change, err
+	}
+	change.Written = true
+	// The day may have been settled under an earlier cutoff, or scraped into
+	// the archive before this split existed.
+	return change, a.other(date).Remove(date)
+}
+
+// Settle moves every pending day that is over into the settled half, and
+// reports the days it moved.
+func (a Archive) Settle() ([]time.Time, error) {
+	paths, err := filepath.Glob(filepath.Join(a.Pending.Dir, "*.json"))
+	if err != nil {
+		return nil, err
+	}
+	slices.Sort(paths)
+
+	var settled []time.Time
+	for _, path := range paths {
+		name := strings.TrimSuffix(filepath.Base(path), ".json")
+		date, err := time.ParseInLocation(DateFormat, name, time.UTC)
+		if err != nil {
+			return nil, fmt.Errorf("%s: not a day file: %w", path, err)
+		}
+		if !date.Before(a.Cutoff.UTC()) {
+			continue
+		}
+		if a.Settled.Has(date) {
+			return nil, fmt.Errorf("%s is both settled and pending; one of them is wrong", name)
+		}
+		if err := os.MkdirAll(a.Settled.Dir, 0o755); err != nil {
+			return nil, err
+		}
+		if err := os.Rename(path, a.Settled.Path(date)); err != nil {
+			return nil, err
+		}
+		settled = append(settled, date)
+	}
+	return settled, nil
+}
+
+// Dated counts the tracks carrying a scrobble time. Now-playing entries are
+// excluded: they are a snapshot of what was on at the moment of the scrape, so
+// a day legitimately loses one between scrapes.
+func Dated(tracks []json.RawMessage) int {
+	var n int
+	for _, t := range tracks {
+		var play struct {
+			Date json.RawMessage `json:"date"`
+		}
+		if err := json.Unmarshal(t, &play); err != nil {
+			continue
+		}
+		if len(play.Date) > 0 {
+			n++
+		}
+	}
+	return n
 }

@@ -1,7 +1,7 @@
 // Command lastfm scrapes a Last.fm listening history into one JSON file per
 // day and builds the SQLite database the Datasette site serves from them.
 //
-//	lastfm fetch    # fill in any missing days, then refresh the most recent
+//	lastfm fetch    # settle the days that are over, fill gaps, refresh the tail
 //	lastfm build    # rebuild music.db from the days on disk
 package main
 
@@ -22,9 +22,13 @@ import (
 )
 
 const (
+	// The settled archive: days that are over and will not be written again.
 	defaultDataDir = "data/lastfm"
-	defaultDB      = "music.db"
-	defaultUser    = "jamesmstone711"
+	// The tail still gaining plays. Kept out of the settled archive so a build
+	// over that archive alone is reproducible between scrapes.
+	defaultPendingDir = "data/pending"
+	defaultDB         = "music.db"
+	defaultUser       = "jamesmstone711"
 	// The first day with any scrobbles on the account.
 	firstDay = "2012-11-01"
 )
@@ -57,14 +61,15 @@ func run(ctx context.Context, args []string) error {
 
 func build(args []string) error {
 	fs := flag.NewFlagSet("build", flag.ExitOnError)
-	dataDir := fs.String("data", defaultDataDir, "directory of scraped day files")
+	dataDir := fs.String("data", defaultDataDir, "directory of settled day files")
+	pendingDir := fs.String("pending", defaultPendingDir, "directory of day files still being scraped")
 	path := fs.String("db", defaultDB, "database to write")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 
 	start := time.Now()
-	stats, err := musicdb.Build(*dataDir, *path)
+	stats, err := musicdb.Build([]string{*dataDir, *pendingDir}, *path)
 	if err != nil {
 		return err
 	}
@@ -74,19 +79,15 @@ func build(args []string) error {
 
 func fetch(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("fetch", flag.ExitOnError)
-	dataDir := fs.String("data", defaultDataDir, "directory of scraped day files")
+	dataDir := fs.String("data", defaultDataDir, "directory of settled day files")
+	pendingDir := fs.String("pending", defaultPendingDir, "directory of day files still being scraped")
 	user := fs.String("user", defaultUser, "Last.fm username")
 	from := fs.String("from", firstDay, "first day to scrape (YYYY-MM-DD)")
 	to := fs.String("to", "", "last day to scrape (YYYY-MM-DD, default today)")
-	refresh := fs.Int("refresh", 2, "re-scrape this many of the most recent days, which may have gained plays")
+	refresh := fs.Int("refresh", 2, "treat this many of the most recent days as still in progress and re-scrape them")
 	workers := fs.Int("workers", 4, "days to scrape at once")
 	if err := fs.Parse(args); err != nil {
 		return err
-	}
-
-	apiKey := os.Getenv("LASTFM_API_KEY")
-	if apiKey == "" {
-		return errors.New("LASTFM_API_KEY is not set")
 	}
 
 	start, err := time.ParseInLocation(lastfm.DateFormat, *from, time.UTC)
@@ -100,22 +101,26 @@ func fetch(ctx context.Context, args []string) error {
 		}
 	}
 
-	client := lastfm.NewClient(apiKey, *user)
-	defer client.Close()
-	store := lastfm.Store{Dir: *dataDir}
-
-	// The last few days are re-scraped unconditionally: a day file written
-	// while the day was still running is missing everything played since.
-	days := lastfm.Days(start, end)
-	stale := days[max(len(days)-*refresh, 0):]
-	var todo []time.Time
-	for _, day := range days {
-		if !store.Has(day) {
-			todo = append(todo, day)
-		}
+	archive := lastfm.Archive{
+		Settled: lastfm.Store{Dir: *dataDir},
+		Pending: lastfm.Store{Dir: *pendingDir},
+		// A day file written while the day was still running is missing
+		// everything played since, so the last few days are re-scraped and
+		// held out of the settled archive until they are over.
+		Cutoff: end.AddDate(0, 0, 1-max(*refresh, 0)),
 	}
-	for _, day := range stale {
-		if store.Has(day) {
+
+	settled, err := archive.Settle()
+	if err != nil {
+		return err
+	}
+	if len(settled) > 0 {
+		log.Printf("settled %d days, through %s", len(settled), settled[len(settled)-1].Format(lastfm.DateFormat))
+	}
+
+	var todo []time.Time
+	for _, day := range lastfm.Days(start, end) {
+		if !archive.Has(day) || !day.Before(archive.Cutoff) {
 			todo = append(todo, day)
 		}
 	}
@@ -124,17 +129,40 @@ func fetch(ctx context.Context, args []string) error {
 		return nil
 	}
 
-	log.Printf("scraping %d of %d days as %s", len(todo), len(days), *user)
+	// Checked here rather than up front so a run with nothing to do needs no
+	// credential, which is what lets the scraper be tested without one.
+	apiKey := os.Getenv("LASTFM_API_KEY")
+	if apiKey == "" {
+		return errors.New("LASTFM_API_KEY is not set")
+	}
+
+	client := lastfm.NewClient(apiKey, *user)
+	defer client.Close()
+
+	log.Printf("scraping %d days as %s", len(todo), *user)
+	var short int
+	var mu sync.Mutex
 	if err := eachDay(ctx, todo, *workers, func(day time.Time) error {
 		tracks, err := client.Day(ctx, day)
 		if err != nil {
 			return err
 		}
-		return store.Write(day, tracks)
+		change, err := archive.Update(day, tracks)
+		if err != nil {
+			return err
+		}
+		if !change.Written {
+			mu.Lock()
+			short++
+			mu.Unlock()
+			log.Printf("WARNING: %s came back with %d plays but %d are on disk; leaving it alone",
+				day.Format(lastfm.DateFormat), change.Scraped, change.OnDisk)
+		}
+		return nil
 	}); err != nil {
 		return err
 	}
-	log.Printf("scraped %d days", len(todo))
+	log.Printf("scraped %d days, %d left alone", len(todo)-short, short)
 	return nil
 }
 
