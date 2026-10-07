@@ -11,6 +11,9 @@ import (
 // tracks.tracks_id duplicates tracks.id. It is a leftover of the join the
 // sqlite-utils pipeline used to attach the duration estimate, kept so saved
 // Datasette queries against it keep working.
+//
+// listens.@attr_nowplaying is kept for the same reason, but is always NULL now
+// that now-playing entries are not recorded as listens at all.
 const schema = `
 CREATE TABLE [artists] (
   [id] INTEGER PRIMARY KEY,
@@ -42,7 +45,7 @@ CREATE TABLE [tracks] (
 );
 CREATE TABLE [listens] (
   [tracks_id] INTEGER REFERENCES [tracks]([id]),
-  [date_uts] TEXT,
+  [date_uts] INTEGER,
   [date_#text] TEXT,
   [loved] TEXT,
   [@attr_nowplaying] TEXT
