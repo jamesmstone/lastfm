@@ -42,8 +42,10 @@ func Build(dirs []string, path string) (Stats, error) {
 	}
 
 	m := newModel()
-	if err := eachDay(paths, func(_ string, day []scrobble) error {
-		m.add(day)
+	if err := eachDay(paths, func(path string, day []scrobble) error {
+		if err := m.add(day); err != nil {
+			return fmt.Errorf("%s: %w", path, err)
+		}
 		return nil
 	}); err != nil {
 		return Stats{}, err
@@ -81,8 +83,9 @@ type track struct {
 }
 
 type listen struct {
-	trackID                         int64
-	uts, utsText, loved, nowPlaying sql.NullString
+	trackID                    int64
+	uts                        sql.NullInt64
+	utsText, loved, nowPlaying sql.NullString
 }
 
 // model accumulates the whole archive in memory. Deduplicating here rather
@@ -109,19 +112,34 @@ func newModel() *model {
 	}
 }
 
-func (m *model) add(day []scrobble) {
+func (m *model) add(day []scrobble) error {
 	for i := range day {
 		s := &day[i]
+		// Resolved even for entries dropped below, so that track, album and
+		// artist ids land where they did in earlier builds.
 		trackID := m.trackID(s, m.albumID(s, m.artistID(s)))
 		uts, utsText := s.date()
+		at, err := parseUTS(uts)
+		if err != nil {
+			return fmt.Errorf("%s: %w", s.Name, err)
+		}
+		// An entry with no scrobble time is the track that was mid-play when the
+		// scrape ran. Last.fm sends those with no date and a now-playing flag
+		// that has already stopped being true by the time the day file is
+		// written, so it is not a listen: the play arrives again, dated, once it
+		// finishes. Dated() in the scraper counts a day the same way.
+		if !at.Valid {
+			continue
+		}
 		m.listens = append(m.listens, listen{
 			trackID:    trackID,
-			uts:        nullString(uts),
+			uts:        at,
 			utsText:    nullString(utsText),
 			loved:      nullString(s.Loved),
 			nowPlaying: nullString(s.nowPlaying()),
 		})
 	}
+	return nil
 }
 
 func (m *model) artistID(s *scrobble) int64 {
@@ -187,11 +205,7 @@ func (m *model) summarise() {
 		if !l.uts.Valid {
 			continue
 		}
-		at, err := strconv.ParseInt(l.uts.String, 10, 64)
-		if err != nil {
-			continue
-		}
-		plays = append(plays, play{l.trackID, at})
+		plays = append(plays, play{l.trackID, l.uts.Int64})
 	}
 	slices.SortStableFunc(plays, func(a, b play) int { return cmp.Compare(a.at, b.at) })
 
@@ -248,4 +262,19 @@ func nullString(s *string) sql.NullString {
 		return sql.NullString{}
 	}
 	return sql.NullString{String: *s, Valid: true}
+}
+
+// parseUTS converts the epoch seconds Last.fm sends as a JSON string into the
+// number the column stores. A value that will not parse is an error rather than
+// a NULL: it would otherwise read as an undated listen and quietly drop out of
+// every play count and duration estimate.
+func parseUTS(s *string) (sql.NullInt64, error) {
+	if s == nil || *s == "" {
+		return sql.NullInt64{}, nil
+	}
+	at, err := strconv.ParseInt(*s, 10, 64)
+	if err != nil {
+		return sql.NullInt64{}, fmt.Errorf("date.uts %q: %w", *s, err)
+	}
+	return sql.NullInt64{Int64: at, Valid: true}, nil
 }

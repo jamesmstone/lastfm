@@ -17,7 +17,9 @@ func build(t *testing.T) *sql.DB {
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
-	want := Stats{Days: 4, Listens: 6, Tracks: 3, Albums: 3, Artists: 3}
+	// Six scrobbles across the four days, two of them now-playing entries that
+	// are not listens.
+	want := Stats{Days: 4, Listens: 4, Tracks: 3, Albums: 3, Artists: 3}
 	if stats != want {
 		t.Errorf("stats = %+v, want %+v", stats, want)
 	}
@@ -146,25 +148,99 @@ func TestBuildNormalises(t *testing.T) {
 	}
 }
 
-func TestBuildKeepsUndatedListens(t *testing.T) {
+func TestBuildDropsNowPlaying(t *testing.T) {
 	db := build(t)
 
-	var nowPlaying int
-	if err := db.QueryRow("SELECT count(*) FROM listens WHERE [@attr_nowplaying] = 'true' AND date_uts IS NULL").Scan(&nowPlaying); err != nil {
-		t.Fatal(err)
-	}
-	if nowPlaying != 2 {
-		t.Errorf("got %d now-playing listens, want 2", nowPlaying)
+	for _, tc := range []struct {
+		what  string
+		query string
+	}{
+		{"undated", `SELECT count(*) FROM listens WHERE date_uts IS NULL`},
+		{"flagged", `SELECT count(*) FROM listens WHERE [@attr_nowplaying] IS NOT NULL`},
+		{"Four in tracks", `SELECT count(*) FROM tracks WHERE name = 'Four'`},
+	} {
+		var got int
+		if err := db.QueryRow(tc.query).Scan(&got); err != nil {
+			t.Fatal(err)
+		}
+		if got != 0 {
+			t.Errorf("%s = %d, want 0", tc.what, got)
+		}
 	}
 
-	// listen_details joins tracks, which only holds tracks with a dated listen,
-	// so Four — scrobbled only as now-playing — drops out of the view.
+	// Every surviving listen is dated, so none of them drop out of the view the
+	// way the undated ones used to.
 	var details int
 	if err := db.QueryRow(`SELECT count(*) FROM listen_details`).Scan(&details); err != nil {
 		t.Fatal(err)
 	}
-	if details != 5 {
-		t.Errorf("listen_details has %d rows, want 5", details)
+	if details != 4 {
+		t.Errorf("listen_details has %d rows, want 4", details)
+	}
+}
+
+func TestBuildStoresDateUTSAsANumber(t *testing.T) {
+	db := build(t)
+
+	var kinds string
+	if err := db.QueryRow(`SELECT group_concat(DISTINCT typeof(date_uts)) FROM listens`).Scan(&kinds); err != nil {
+		t.Fatal(err)
+	}
+	if kinds != "integer" {
+		t.Errorf("date_uts storage classes = %q, want integer", kinds)
+	}
+}
+
+func TestBuildOrdersDateUTSNumerically(t *testing.T) {
+	// 999 sorts after 1000 as text, so the column being numeric is what stops
+	// the older play being read as the most recent one.
+	dir := t.TempDir()
+	for name, uts := range map[string]string{"2020-01-01.json": "1000", "2020-01-02.json": "999"} {
+		play := `[{"artist":{"url":"u","name":"X","image":[],"mbid":""},"date":{"uts":"` + uts +
+			`","#text":"t"},"mbid":"t1","name":"One","image":[],"url":"u","streamable":"0",` +
+			`"album":{"mbid":"","#text":"A"},"loved":"0"}]`
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(play), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	path := filepath.Join(t.TempDir(), "music.db")
+	if _, err := Build([]string{dir}, path); err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("sqlite3", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	var latest int64
+	if err := db.QueryRow(`SELECT date_uts FROM listens ORDER BY date_uts DESC LIMIT 1`).Scan(&latest); err != nil {
+		t.Fatal(err)
+	}
+	if latest != 1000 {
+		t.Errorf("latest date_uts = %d, want 1000", latest)
+	}
+}
+
+func TestBuildRejectsAnUnparseableDate(t *testing.T) {
+	dir := t.TempDir()
+	play := `[{"artist":{"url":"u","name":"X","image":[],"mbid":""},"date":{"uts":"later",` +
+		`"#text":"t"},"mbid":"t1","name":"One","image":[],"url":"u","streamable":"0",` +
+		`"album":{"mbid":"","#text":"A"},"loved":"0"}]`
+	if err := os.WriteFile(filepath.Join(dir, "2020-01-01.json"), []byte(play), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := Build([]string{dir}, filepath.Join(t.TempDir(), "music.db"))
+	if err == nil {
+		t.Fatal("want an error when date.uts is not a number")
+	}
+	// Naming the day and the value is what makes a bad scrape findable.
+	for _, want := range []string{"2020-01-01.json", `"later"`} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("got %v, want it to mention %s", err, want)
+		}
 	}
 }
 
