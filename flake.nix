@@ -45,7 +45,7 @@
           version = "0.1.0";
           inherit src;
 
-          vendorHash = "sha256-IUyZTlMqht5sx010M3kc96okTBsRrL1e+6m1VVWvK0k=";
+          vendorHash = "sha256-sgDI6KHLv+HDo861fQ2eIqWOsIMA+WBfcomaj7SJFvQ=";
 
           # go-sqlite3 compiles FTS5 out unless it is asked for, and the
           # database exposes full-text search over the track, album and artist
