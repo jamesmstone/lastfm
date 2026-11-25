@@ -165,17 +165,14 @@
           # Drives the real unit, so the scraper's PATH and sandbox are exercised
           # rather than the builder's. No API key and no network (the unit is
           # denied it outright): the window is one day that is already on disk,
-          # so there is nothing to scrape and the run is migration, settling,
-          # build and publish.
+          # so there is nothing to scrape and the run is settling, build and
+          # publish.
           scraper = pkgs.testers.runNixOSTest {
             name = "lastfm-scraper";
 
             nodes.machine = {
               imports = [ self.nixosModules.scraper ];
-              environment.systemPackages = [
-                pkgs.git
-                pkgs.sqlite
-              ];
+              environment.systemPackages = [ pkgs.sqlite ];
               services.lastfm-scraper = {
                 enable = true;
                 publish = "/srv/site/music.db";
@@ -192,7 +189,6 @@
             testScript = ''
               day = """[{"artist":{"url":"u","name":"X","image":[],"mbid":""},"date":{"uts":"1577836800","#text":"01 Jan 2020, 00:00"},"mbid":"t","name":"One","image":[],"url":"tu","streamable":"0","album":{"mbid":"","#text":"A"},"loved":"0"}]"""
               state = "/var/lib/lastfm-scraper"
-              repo = f"{state}/repo"
 
               machine.wait_for_unit("multi-user.target")
 
@@ -200,46 +196,27 @@
                   machine.fail("systemctl is-active lastfm-scraper.service")
                   machine.fail(f"test -e {state}")
 
-              # The layout the git-scrape left behind: a root-owned clone (on a
-              # real host, whichever user ran the git scrape owns it) holding a pending day, so the
-              # run has something to migrate and then to settle.
-              machine.succeed(f"mkdir -p {repo}/data/pending")
-              machine.succeed(f"cat > {repo}/data/pending/2020-01-01.json <<'JSON'\n{day}\nJSON")
-              machine.succeed(
-                  f"git -C {repo} init -q -b main",
-                  f"git -C {repo} add -A",
-                  f"git -C {repo} -c user.name=t -c user.email=t@t commit -qm seed",
-              )
+              # A pending day already on disk, root-owned: the unit's
+              # StateDirectory= has to hand the directory to its own user.
+              machine.succeed(f"mkdir -p {state}/data/pending")
+              machine.succeed(f"cat > {state}/data/pending/2020-01-01.json <<'JSON'\n{day}\nJSON")
 
               machine.succeed("systemctl start lastfm-scraper.service")
 
-              with subtest("the archive moved out of the clone and the day settled"):
+              with subtest("the day settled, owned by the scraper's user"):
                   machine.succeed(f"test -s {state}/data/lastfm/2020-01-01.json")
                   machine.fail(f"test -e {state}/data/pending/2020-01-01.json")
-                  machine.fail(f"test -e {state}/.data.migrating")
                   owner = machine.succeed(f"stat -c %U {state}/data/lastfm/2020-01-01.json").strip()
                   assert owner == "lastfm-scraper", owner
-
-              with subtest("the old clone was left as it was"):
-                  machine.succeed(f"test -s {repo}/data/pending/2020-01-01.json")
-                  machine.fail(f"test -e {repo}/data/lastfm/2020-01-01.json")
-                  status = machine.succeed(f"git -c safe.directory='*' -C {repo} status --porcelain")
-                  assert status == "", status
-                  count = machine.succeed(f"git -c safe.directory='*' -C {repo} rev-list --count HEAD").strip()
-                  assert count == "1", count
 
               with subtest("the database was published"):
                   machine.succeed("test -s /srv/site/music.db")
                   listens = machine.succeed("sqlite3 /srv/site/music.db 'select count(*) from listens'")
                   assert listens.strip() == "1", listens
 
-              with subtest("a second run does not migrate again and still succeeds"):
-                  # Written to the clone after the migration: the next run
-                  # must not copy it, since the clone is no longer the archive.
-                  machine.succeed(f"mkdir -p {repo}/data/lastfm && echo '[]' > {repo}/data/lastfm/2019-12-31.json")
+              with subtest("a second run changes nothing and still succeeds"):
                   machine.succeed("systemctl start lastfm-scraper.service")
                   machine.succeed(f"test -s {state}/data/lastfm/2020-01-01.json")
-                  machine.fail(f"test -e {state}/data/lastfm/2019-12-31.json")
                   listens = machine.succeed("sqlite3 /srv/site/music.db 'select count(*) from listens'")
                   assert listens.strip() == "1", listens
             '';

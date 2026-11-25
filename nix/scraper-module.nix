@@ -19,8 +19,7 @@ in
   imports = [
     (lib.mkRemovedOptionModule [ "services" "lastfm-scraper" "remote" ] ''
       The scraper no longer clones, commits or pushes: the archive lives only in
-      `stateDir`, which should be backed up. A stateDir holding the old clone
-      (stateDir/repo) is converted on the first run.
+      `stateDir`, which should be backed up.
     '')
   ];
 

@@ -42,10 +42,6 @@ services.lastfm-scraper = {
 };
 ```
 
-A state directory left by the git-scrape version (a clone at `stateDir/repo`)
-is converted on the first run: the clone's `data/` is copied to
-`stateDir/data` and the clone is left where it is, to be deleted by hand.
-
 `nix develop` gives you a shell with Go, a C toolchain for go-sqlite3, and the
 `sqlite3` CLI. The binary needs the `sqlite_fts5` build tag, so build it with
 `nix build` rather than a bare `go build`.
