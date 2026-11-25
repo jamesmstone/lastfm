@@ -64,8 +64,8 @@
 
         # The database over the settled days alone: reproducible, and rebuilt
         # when a day is added rather than every time the tail is re-scraped.
-        # It is deliberately a day or two behind — what the site serves is built
-        # by the scraper, which also has the pending days.
+        # It deliberately lacks the pending days — what the site serves is built
+        # by the scraper, which has them.
         musicdb = pkgs.runCommand "music.db" { } ''
           mkdir -p pending
           ${lib.getExe lastfm} build -data ${settled} -pending pending -db $out
@@ -202,8 +202,8 @@
                   machine.fail("systemctl is-active lastfm-scraper.service")
                   machine.fail(f"test -e {state}")
 
-              # The layout the git-scrape left behind: a root-owned clone (on
-              # hermanii it was the old user's) holding a pending day, so the
+              # The layout the git-scrape left behind: a root-owned clone (on a
+              # real host, whichever user ran the git scrape owns it) holding a pending day, so the
               # run has something to migrate and then to settle.
               machine.succeed(f"mkdir -p {repo}/data/pending")
               machine.succeed(f"cat > {repo}/data/pending/2020-01-01.json <<'JSON'\n{day}\nJSON")

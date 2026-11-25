@@ -144,7 +144,7 @@ in
         Group = cfg.group;
         WorkingDirectory = cfg.stateDir;
         ExecStart = lib.getExe cfg.package;
-        # The box also runs the forge; a scrape is never the urgent thing on it.
+        # A scrape is never urgent; keep it out of the way of the host's other work.
         Nice = 19;
         IOSchedulingClass = "idle";
         ProtectSystem = "strict";
