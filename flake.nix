@@ -16,8 +16,7 @@
       ];
       forEachSystem = f: lib.genAttrs systems (system: f nixpkgs.legacyPackages.${system});
 
-      # Only the Go sources: including data/ would copy the whole archive into
-      # the store and rebuild the binary every time a day is scraped.
+      # Only the Go sources.
       src = lib.fileset.toSource {
         root = ./.;
         fileset = lib.fileset.unions [
@@ -28,12 +27,10 @@
         ];
       };
 
-      # The settled half of the archive, as its own store path so that
-      # re-scraping the pending tail does not invalidate the database below.
-      # Rooted at the directory itself, not the flake, for the same reason.
-      settled = lib.fileset.toSource {
-        root = ./data/lastfm;
-        fileset = ./data/lastfm;
+      # The Go tests' archive: settled days and a pending tail, as a real one has.
+      fixture = lib.fileset.toSource {
+        root = ./internal/musicdb/testdata;
+        fileset = ./internal/musicdb/testdata;
       };
     in
     {
@@ -62,15 +59,6 @@
           };
         };
 
-        # The database over the settled days alone: reproducible, and rebuilt
-        # when a day is added rather than every time the tail is re-scraped.
-        # It deliberately lacks the pending days — what the site serves is built
-        # by the scraper, which has them.
-        musicdb = pkgs.runCommand "music.db" { } ''
-          mkdir -p pending
-          ${lib.getExe lastfm} build -data ${settled} -pending pending -db $out
-        '';
-
         # What the systemd unit runs. A package rather than a script inlined in
         # the module, so the unit's PATH is the one the VM test exercises.
         scrape = pkgs.writeShellApplication {
@@ -91,7 +79,17 @@
         {
           # buildGoModule runs `go test` as part of this.
           build = self.packages.${pkgs.system}.lastfm;
-          inherit (self.packages.${pkgs.system}) musicdb scrape;
+          inherit (self.packages.${pkgs.system}) scrape;
+
+          # The CLI end to end over the fixture: the archive itself lives in the
+          # scraper's state directory, not in this repo.
+          musicdb = pkgs.runCommand "lastfm-musicdb-fixture" { nativeBuildInputs = [ pkgs.sqlite ]; } ''
+            ${lib.getExe self.packages.${pkgs.system}.lastfm} build -data ${fixture}/days -pending ${fixture}/pending -db music.db
+            tables=$(sqlite3 music.db .tables)
+            echo "$tables"
+            [ -n "$tables" ]
+            touch $out
+          '';
 
           gofmt = pkgs.runCommandLocal "lastfm-gofmt" { nativeBuildInputs = [ pkgs.go ]; } ''
             unformatted=$(cd ${src} && gofmt -l .)

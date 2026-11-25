@@ -20,12 +20,6 @@ jobs:
         uses: actions/checkout@v7
 
       # Builds the binary, runs the Go tests, gofmt-checks the sources, builds
-      # music.db from the committed days, and drives the scraper unit in a VM.
+      # music.db from the fixture, and drives the scraper unit in a VM.
       - name: Build and test
         run: nix flake check --print-build-logs
-
-      - name: Build the database from the committed data
-        run: nix build .#musicdb --print-build-logs
-
-      - name: Check the database
-        run: nix run nixpkgs#sqlite -- result .tables

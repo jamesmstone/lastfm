@@ -13,25 +13,20 @@ changing:
   `lastfm fetch` re-scrapes these every run and moves them across once they are
   over.
 
-That split is what lets `nix build .#musicdb` be a real build output: the
-settled half changes when a day is added, not every time the tail is
-re-scraped. The database itself is not committed — what the site serves is
-built by the scraper, which also has the pending days, and installed at
-`services.lastfm-scraper.publish`.
+What the site serves is built by the scraper, which has both halves, and
+installed at `services.lastfm-scraper.publish`.
 
 This started as a git scrape, with the scraper committing every run back to
 this repository. It no longer does: the deployed scraper keeps the archive in
 `services.lastfm-scraper.stateDir`, which is the only live copy and is backed
-up by the host, and it never clones, commits or pushes. The
-`data/` in this repository is a snapshot from before that change and no longer
-grows.
+up by the host, and it never clones, commits or pushes. Every day up to that
+change is still in this repository's history, under `data/`.
 
 ```bash
 LASTFM_API_KEY=... nix run . -- fetch   # settle, backfill, refresh the tail
 nix run . -- build                      # rebuild music.db from both halves
-nix build .#musicdb                     # the settled half alone, reproducible
 ./datasette.sh                          # browse it with Datasette
-nix flake check                         # build, test, gofmt, the unit check and the scraper VM test
+nix flake check                         # build, test, gofmt, music.db over the fixture, the unit check and the scraper VM test
 ```
 
 `nixosModules.scraper` runs the whole thing from a systemd timer as its own
