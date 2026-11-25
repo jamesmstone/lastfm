@@ -9,8 +9,12 @@
 
 .idea
 
-# Large and fully derived from data/lastfm; the scrape publishes it to the
-# datasette host rather than committing it.
+# The archive a local `fetch` writes: the deployed one lives in the scraper's
+# state directory, and the days before that are in this repo's history.
+/data/
+
+# Large and fully derived from data/; the scrape publishes it rather than
+# committing it.
 music.db
 
 # nix build symlink
