@@ -7,8 +7,23 @@
 }:
 let
   cfg = config.services.lastfm-scraper;
+
+  # StateDirectory= creates the directory and, when its owner is wrong (a
+  # persisted bind mount, or a state dir an earlier user owned), chowns it
+  # recursively. It only takes paths under /var/lib; anything else gets a
+  # tmpfiles rule instead.
+  stateDirectory = lib.removePrefix "/var/lib/" cfg.stateDir;
+  underVarLib = lib.hasPrefix "/var/lib/" cfg.stateDir;
 in
 {
+  imports = [
+    (lib.mkRemovedOptionModule [ "services" "lastfm-scraper" "remote" ] ''
+      The scraper no longer clones, commits or pushes: the archive lives only in
+      `stateDir`, which should be backed up. A stateDir holding the old clone
+      (stateDir/repo) is converted on the first run.
+    '')
+  ];
+
   options.services.lastfm-scraper = {
     enable = lib.mkEnableOption "the Last.fm scraper";
 
@@ -19,19 +34,19 @@ in
       description = "The scraper package to run.";
     };
 
-    remote = lib.mkOption {
-      type = lib.types.str;
-      description = "Git remote holding the archive; the scraper clones and pushes to it.";
-    };
-
     user = lib.mkOption {
       type = lib.types.str;
-      default = "james";
+      default = "lastfm-scraper";
       description = ''
-        User to run as. Its ~/.ssh must be able to push to `remote`, which is
-        why the unit does not set ProtectHome. It also needs write access to
-        `publish`, if that is set.
+        User the scraper runs as; created if it is the default. It needs write
+        access to the directory `publish` is in, if that is set.
       '';
+    };
+
+    group = lib.mkOption {
+      type = lib.types.str;
+      default = "lastfm-scraper";
+      description = "Group the scraper runs as; created if it is the default.";
     };
 
     interval = lib.mkOption {
@@ -43,7 +58,10 @@ in
     stateDir = lib.mkOption {
       type = lib.types.str;
       default = "/var/lib/lastfm-scraper";
-      description = "Holds the scraper's checkout of the archive and the database it builds.";
+      description = ''
+        The only copy of the archive (data/lastfm and data/pending) and the
+        music.db built from it. Back it up; music.db need not be.
+      '';
     };
 
     apiKeyFile = lib.mkOption {
@@ -61,7 +79,9 @@ in
       example = "/var/lib/datasette-sites/lastfm/music.db";
       description = ''
         Where to install the rebuilt database, replaced by rename so a reader
-        never sees a partial file. Null builds it in `stateDir` and stops there.
+        never sees a partial file. Its directory must already exist and be
+        writable by the unit; it is the only path outside `stateDir` the unit
+        may write. Null builds it in `stateDir` and stops there.
       '';
     };
 
@@ -89,15 +109,28 @@ in
   };
 
   config = lib.mkIf cfg.enable {
-    systemd.tmpfiles.rules = [ "d ${cfg.stateDir} 0750 ${cfg.user} - - -" ];
+    users.users = lib.mkIf (cfg.user == "lastfm-scraper") {
+      lastfm-scraper = {
+        isSystemUser = true;
+        group = cfg.group;
+        home = cfg.stateDir;
+      };
+    };
+    users.groups = lib.mkIf (cfg.group == "lastfm-scraper") { lastfm-scraper = { }; };
+
+    systemd.tmpfiles.rules = lib.optional (
+      !underVarLib
+    ) "d ${cfg.stateDir} 0750 ${cfg.user} ${cfg.group} - -";
 
     systemd.services.lastfm-scraper = {
       description = "Scrape the Last.fm listening history and rebuild music.db";
+      # No wantedBy: a wanted oneshot is started by every switch-to-configuration.
+      # The timer is the only thing that starts it.
+      restartIfChanged = false;
       after = [ "network-online.target" ];
       wants = [ "network-online.target" ];
 
       environment = {
-        LASTFM_REMOTE = cfg.remote;
         LASTFM_STATE = cfg.stateDir;
         LASTFM_REFRESH = toString cfg.refresh;
       }
@@ -108,13 +141,22 @@ in
       serviceConfig = {
         Type = "oneshot";
         User = cfg.user;
+        Group = cfg.group;
+        WorkingDirectory = cfg.stateDir;
         ExecStart = lib.getExe cfg.package;
-        # The box also runs the forge; a scrape is never the urgent thing on it.
+        # A scrape is never urgent; keep it out of the way of the host's other work.
         Nice = 19;
         IOSchedulingClass = "idle";
-        NoNewPrivileges = true;
+        ProtectSystem = "strict";
+        ProtectHome = true;
+        ReadWritePaths = [ cfg.stateDir ] ++ lib.optional (cfg.publish != null) (dirOf cfg.publish);
         PrivateTmp = true;
+        NoNewPrivileges = true;
         LoadCredential = lib.optional (cfg.apiKeyFile != null) "api-key:${cfg.apiKeyFile}";
+      }
+      // lib.optionalAttrs underVarLib {
+        StateDirectory = stateDirectory;
+        StateDirectoryMode = "0750";
       };
     };
 
