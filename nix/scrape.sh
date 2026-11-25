@@ -27,21 +27,6 @@ if [ -z "${LASTFM_API_KEY:-}" ] && [ -r "${CREDENTIALS_DIRECTORY:-/nonexistent}/
   export LASTFM_API_KEY
 fi
 
-# One-time migration from the git-scrape layout, where the archive lived in a
-# clone at $LASTFM_STATE/repo. Its working tree is copied rather than moved, so
-# the clone is left exactly as it was (and any days a killed run left
-# uncommitted come across too); delete it by hand once the new layout has run.
-# Staged and renamed so a run killed mid-copy starts the copy again instead of
-# scraping on top of half an archive.
-legacy=$LASTFM_STATE/repo
-if [ ! -d "$data" ] && [ -d "$legacy/.git" ] && [ -d "$legacy/data" ]; then
-  echo "migrating the archive out of the git clone at $legacy" >&2
-  staging=$LASTFM_STATE/.data.migrating
-  rm -rf "$staging"
-  cp -a --reflink=auto "$legacy/data" "$staging"
-  mv "$staging" "$data"
-fi
-
 mkdir -p "$settled" "$pending"
 
 lastfm fetch -data "$settled" -pending "$pending" -refresh "$refresh" ${LASTFM_FROM:+-from "$LASTFM_FROM"} ${LASTFM_TO:+-to "$LASTFM_TO"}
